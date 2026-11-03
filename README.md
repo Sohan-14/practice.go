@@ -579,3 +579,6 @@ under load,
 across a team of ten,
 for three years?"
 ```
+
+# Let's Fix Them One By One
+- P1 — Graceful Shutdown - Done
