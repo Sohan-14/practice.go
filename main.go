@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 )
@@ -17,10 +18,13 @@ func main() {
 	mux.HandleFunc("GET /{$}", homeHandler)
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /api/hello", helloHandler)
+	mux.HandleFunc("GET /panic", panicHandler)
+
+	handler := recoverMiddleware(requestLogger(mux))
 
 	server := &http.Server{
 		Addr:         ":8080",
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -61,6 +65,10 @@ func main() {
 	log.Println("graceful shutdown complete")
 }
 
+func panicHandler(w http.ResponseWriter, r *http.Request) {
+	panic("something went terribly wrong")
+}
+
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "Welcome to my Go HTTP server!")
 	fmt.Fprintln(w, "Try: /health or /api/hello?name=World")
@@ -84,4 +92,34 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
+}
+
+// requestLogger wraps a handler and logs before and after it runs.
+func requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// BEFORE the wrapped handler runs
+		log.Printf("--> %s %s", r.Method, r.URL.Path)
+
+		// call the next handler in the chain
+		next.ServeHTTP(w, r)
+
+		// AFTER the wrapped handler runs
+		log.Printf("<-- done %s %s", r.Method, r.URL.Path)
+	})
+}
+
+func recoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("recovered from panic: %v\n%s", rec, debug.Stack())
+
+				writeJSON(w, http.StatusInternalServerError, map[string]string{
+					"error": "Internal Server Error",
+				})
+			}
+		}()
+
+		next.ServeHTTP(w, r)
+	})
 }

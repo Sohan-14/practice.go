@@ -9,7 +9,6 @@ go mod init example.com/practice
 This command this create a go.mod file inside the practice folder
 
 > go mod init example.com/practice
->
 
 #### go.mod
 
@@ -148,7 +147,7 @@ This program creates a **web server**. A web server is a program that does one t
 mux := http.NewServeMux()
 ```
 
-A **mux** (multiplexer) is a router. It's the "host" that looks at each incoming request's URL and decides *which function* should handle it.
+A **mux** (multiplexer) is a router. It's the "host" that looks at each incoming request's URL and decides _which function_ should handle it.
 
 **Step 2: Register the routes**
 
@@ -160,11 +159,11 @@ mux.HandleFunc("GET /api/hello", helloHandler)
 
 This says:
 
-| Pattern | Meaning |
-| --- | --- |
-| `GET /{$}` | When someone visits **exactly** `/` (the home page) with a GET request → run `homeHandler` |
-| GET /health | When someone visits `/health` → run `healthHandler` |
-| `GET /api/hello` | When someone visits `/api/hello` → run `helloHandler` |
+| Pattern          | Meaning                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| `GET /{$}`       | When someone visits **exactly** `/` (the home page) with a GET request → run `homeHandler` |
+| GET /health      | When someone visits `/health` → run `healthHandler`                                        |
+| `GET /api/hello` | When someone visits `/api/hello` → run `helloHandler`                                      |
 
 `GET` is the HTTP method — "give me data" (vs. `POST` = "here's data to save"). And we have more methods
 
@@ -206,8 +205,8 @@ Every handler has the same signature:
 func handlerName(w http.ResponseWriter, r *http.Request)
 ```
 
-- **`w` (ResponseWriter)** — where you *write the answer*. Whatever you write here gets sent back to the client.
-- **`r` (Request)** — everything the client *sent you*: the URL, method, headers, query parameters, body...
+- **`w` (ResponseWriter)** — where you _write the answer_. Whatever you write here gets sent back to the client.
+- **`r` (Request)** — everything the client _sent you_: the URL, method, headers, query parameters, body...
 
 **Home handler**
 
@@ -228,7 +227,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-Returns `{"status":"ok"}`. This endpoint exists so monitoring tools can ask *"are you alive?"* — if they get a 200 back, the server is healthy.
+Returns `{"status":"ok"}`. This endpoint exists so monitoring tools can ask _"are you alive?"_ — if they get a 200 back, the server is healthy.
 
 `http.StatusOK` is just the number **200** (HTTP status code for "success").
 
@@ -283,21 +282,21 @@ Here's the full journey:
 
 ```markdown
 1. curl sends an HTTP request:
-      GET /api/hello?name=Alice
-      (to localhost, port 8080)
-          ↓
+   GET /api/hello?name=Alice
+   (to localhost, port 8080)
+   ↓
 2. ListenAndServe() receives it
-          ↓
+   ↓
 3. The mux checks: "GET /api/hello" → matches! → call helloHandler
-          ↓
+   ↓
 4. helloHandler reads ?name=Alice from the URL
-          ↓
+   ↓
 5. Builds: {"message": "Hello, Alice!"}
-          ↓
+   ↓
 6. writeJSON sets headers, status 200, writes JSON body
-          ↓
+   ↓
 7. Response travels back to curl
-          ↓
+   ↓
 8. curl prints: {"message":"Hello, Alice!"}
 ```
 
@@ -346,17 +345,17 @@ The mux has no route for `/whatever`, so Go automatically returns **404** ("not 
 
 **Recap**
 
-| Concept | Role |
-| --- | --- |
-| `http.Server` | Listens on a port, accepts connections |
-| ServeMux | Routes URLs → handler functions |
-| Handler | Your code that builds the response |
-| Request | What the client sent |
-| ResponseWriter | Where you write the reply |
-| Status code | `200` = OK, `404` = not found |
-| JSON | Standard data format for APIs |
+| Concept        | Role                                   |
+| -------------- | -------------------------------------- |
+| `http.Server`  | Listens on a port, accepts connections |
+| ServeMux       | Routes URLs → handler functions        |
+| Handler        | Your code that builds the response     |
+| Request        | What the client sent                   |
+| ResponseWriter | Where you write the reply              |
+| Status code    | `200` = OK, `404` = not found          |
+| JSON           | Standard data format for APIs          |
 
-**The mental model:** the server is an infinite loop of *receive request → route it → run handler → send response*.
+**The mental model:** the server is an infinite loop of _receive request → route it → run handler → send response_.
 
 ---
 
@@ -526,7 +525,7 @@ The mux has no route for `/whatever`, so Go automatically returns **404** ("not 
 
 **P24 — No versioning or build metadata**
 
-- **Gap:** No way to tell *which* build is running.
+- **Gap:** No way to tell _which_ build is running.
 - **Risk:** Can't debug or roll back reliably.
 - **Task:** Inject version/commit via `ldflags`; expose at a `/version` endpoint.
 
@@ -555,18 +554,18 @@ The mux has no route for `/whatever`, so Go automatically returns **404** ("not 
 This is really a progression of engineering maturity:
 
 ```markdown
-Prototype        → It runs                       (what we built)
-Production       → It survives failure & load    (P1, P6, P9, P10, P12, P23)
-Enterprise       → It scales across teams/time   (P19–P25, CI, contracts)
+Prototype → It runs (what we built)
+Production → It survives failure & load (P1, P6, P9, P10, P12, P23)
+Enterprise → It scales across teams/time (P19–P25, CI, contracts)
 ```
 
 **Suggested Priority (highest risk first)**
 
-- **P1** Graceful shutdown, **P10** panic recovery — *availability*
-- **P12** TLS, **P13** input limits — *security*
-- **P6** structured logging, **P7** metrics — *you can't fix what you can't see*
-- **P17/P18** tests + CI — *everything else depends on safe change*
-- **P19–P21** architecture — *before the codebase/team grows*
+- **P1** Graceful shutdown, **P10** panic recovery — _availability_
+- **P12** TLS, **P13** input limits — _security_
+- **P6** structured logging, **P7** metrics — _you can't fix what you can't see_
+- **P17/P18** tests + CI — _everything else depends on safe change_
+- **P19–P21** architecture — _before the codebase/team grows_
 
 **The core mindset shift:**
 
@@ -581,4 +580,6 @@ for three years?"
 ```
 
 # Let's Fix Them One By One
+
 - P1 — Graceful Shutdown - Done
+- P10 — No panic recovery - Done
