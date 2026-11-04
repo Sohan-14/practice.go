@@ -585,3 +585,4 @@ for three years?"
 - P10 — No panic recovery - Done
 - P6 — Structured Logging & Request IDs - Done
 - P13 — Input Validation & Size Limits - Done
+- P14 — Rate Limiting - Done

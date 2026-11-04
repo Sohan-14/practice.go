@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -46,10 +49,105 @@ type errorResponse struct {
 	Details []validationError `json:"details,omitempty"`
 }
 
+// clientBucket holds the state for a single client's token bucket.
+type clientBucket struct {
+	tokens     float64
+	lastRefill time.Time
+}
+
+// RateLimiter manages token buckets for multiple clients.
+type RateLimiter struct {
+	mu         sync.Mutex // Protects the clients map
+	clients    map[string]*clientBucket
+	capacity   float64 // Max tokens (burst limit)
+	refillRate float64 // Tokens added per second
+}
+
+// NewRateLimiter creates a rate limiter with the given capacity and refill rate.
+func NewRateLimiter(capacity float64, refillRate float64) *RateLimiter {
+	return &RateLimiter{
+		clients:    make(map[string]*clientBucket),
+		capacity:   capacity,
+		refillRate: refillRate,
+	}
+}
+
+// Allow checks if a request from the given clientID should be allowed.
+// Returns (allowed, retryAfter) where retryAfter is how long to wait if not allowed.
+func (rl *RateLimiter) Allow(clientID string) (bool, time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	bucket, exists := rl.clients[clientID]
+	now := time.Now()
+
+	if !exists {
+		bucket = &clientBucket{
+			tokens:     rl.capacity,
+			lastRefill: now,
+		}
+		rl.clients[clientID] = bucket
+	} else {
+		elapsed := now.Sub(bucket.lastRefill).Seconds()
+		bucket.tokens += elapsed * rl.refillRate
+
+		if bucket.tokens > rl.capacity {
+			bucket.tokens = rl.capacity
+		}
+
+		bucket.lastRefill = now
+	}
+
+	if bucket.tokens >= 1.0 {
+		bucket.tokens -= 1.0
+		return true, 0 // Allowed, no retry needed
+	}
+
+	// Not allowed: calculate how long until we have 1 token
+	// We need (1.0 - current_tokens) more tokens
+	// At refillRate tokens per second, that takes:
+	tokensNeeded := 1.0 - bucket.tokens
+	retryAfterSeconds := tokensNeeded / rl.refillRate
+	retryAfter := time.Duration(retryAfterSeconds * float64(time.Second))
+
+	return false, retryAfter
+}
+
+// Cleanup removes entries that haven't been used for longer than maxAge.
+func (rl *RateLimiter) Cleanup(maxAge time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	for clientID, bucket := range rl.clients {
+		if now.Sub(bucket.lastRefill) > maxAge {
+			delete(rl.clients, clientID)
+		}
+	}
+}
+
+// StartCleanup launches a background goroutine that periodically cleans up stale entries.
+func (rl *RateLimiter) StartCleanup(interval, maxAge time.Duration) {
+	go func() {
+		for {
+			time.Sleep(interval)
+			rl.Cleanup(maxAge)
+		}
+	}()
+}
+
 func main() {
 
 	// Initialize structured JSON logger
 	logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// NEW: Create a rate limiter
+	// Capacity: 10 requests (burst), Refill rate: 2 tokens per second
+	rateLimiter := NewRateLimiter(10.0, 2.0)
+
+	// NEW: Start background cleanup
+	// Run cleanup every 5 minutes, remove entries older than 1 hour
+	rateLimiter.StartCleanup(5*time.Minute, 1*time.Hour)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", homeHandler)
@@ -58,7 +156,16 @@ func main() {
 	mux.HandleFunc("POST /api/users", createUserHandler)
 	mux.HandleFunc("GET /api/search", searchHandler)
 
-	handler := recoverMiddleware(loggingMiddleware(mux))
+	// Apply middleware layers (inside-out order)
+	// 1. mux (routing)
+	// 2. loggingMiddleware (logs request start/finish)
+	// 3. rateLimitMiddleware (enforces rate limits)
+	// 4. recoverMiddleware (catches panics)
+	handler := recoverMiddleware(
+		rateLimitMiddleware(rateLimiter)(
+			loggingMiddleware(mux),
+		),
+	)
 
 	server := &http.Server{
 		Addr:         ":8080",
@@ -344,4 +451,41 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		"page":  page,
 		"limit": limit,
 	})
+}
+func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			clientIP := getClientIP(r)
+
+			allowed, retryAfter := rl.Allow(clientIP)
+
+			if !allowed {
+				// Set the Retry-After header (in seconds, rounded up)
+				retryAfterSeconds := int(math.Ceil(retryAfter.Seconds()))
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+
+				// Return structured error
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":       "rate_limit_exceeded",
+					"message":     "Too many requests. Please try again later.",
+					"retry_after": strconv.Itoa(retryAfterSeconds),
+				})
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func getClientIP(r *http.Request) string {
+	// RemoteAddr is in the format "IP:port"
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// If SplitHostPort fails, just return RemoteAddr as-is
+		return r.RemoteAddr
+	}
+	return ip
 }
