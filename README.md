@@ -583,3 +583,4 @@ for three years?"
 
 - P1 — Graceful Shutdown - Done
 - P10 — No panic recovery - Done
+- P6 — Structured Logging & Request IDs - Done
