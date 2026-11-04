@@ -586,3 +586,4 @@ for three years?"
 - P6 — Structured Logging & Request IDs - Done
 - P13 — Input Validation & Size Limits - Done
 - P14 — Rate Limiting - Done
+- P12 — TLS/HTTPS - Done

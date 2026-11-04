@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -167,22 +168,55 @@ func main() {
 		),
 	)
 
-	server := &http.Server{
+	httpsServer := &http.Server{
 		Addr:         ":8080",
 		Handler:      handler,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
+		TLSConfig: &tls.Config{
+			// Force TLS 1.2 or higher (disable TLS 1.0 and 1.1)
+			MinVersion: tls.VersionTLS12,
+
+			// Use only strong cipher suites
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			},
+
+			// Prefer server's cipher order (not client's)
+			PreferServerCipherSuites: true,
+		},
+	}
+
+	// NEW: HTTP redirect server
+	httpRedirectMux := http.NewServeMux()
+	httpRedirectMux.HandleFunc("/", redirectHandler)
+
+	httpServer := &http.Server{
+		Addr:    ":80",
+		Handler: httpRedirectMux,
 	}
 
 	// serverErr carries fatal startup errors (e.g. port already in use)
 	// from the server goroutine back to main.
-	serverErr := make(chan error, 1)
+	serverErr := make(chan error, 2)
 
+	// Start HTTP redirect server
 	go func() {
-		log.Println("server starting on :8080")
-		// http.ErrServerClosed is the expected result of a graceful Shutdown,
-		// so we only report real errors.
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Println("HTTP redirect server starting on :80")
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}()
+
+	// Start HTTPS server
+	go func() {
+		log.Println("HTTPS server starting on :8080")
+		if err := httpsServer.ListenAndServeTLS("cert.pem", "key.pem"); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
 	}()
@@ -202,9 +236,12 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("forced shutdown: %v", err)
-		os.Exit(1)
+	// Shutdown both servers
+	if err := httpServer.Shutdown(ctx); err != nil {
+		log.Printf("HTTP server forced shutdown: %v", err)
+	}
+	if err := httpsServer.Shutdown(ctx); err != nil {
+		log.Printf("HTTPS server forced shutdown: %v", err)
 	}
 
 	log.Println("graceful shutdown complete")
@@ -321,7 +358,6 @@ func createUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(&user); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{
@@ -488,4 +524,14 @@ func getClientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return ip
+}
+
+// redirectHandler redirects all HTTP requests to HTTPS.
+func redirectHandler(w http.ResponseWriter, r *http.Request) {
+	// Build the HTTPS URL
+	httpsURL := "https://" + r.Host + r.URL.RequestURI()
+
+	// 301 = permanent redirect (browsers cache this)
+	// 302 = temporary redirect (browsers don't cache)
+	http.Redirect(w, r, httpsURL, http.StatusMovedPermanently)
 }
