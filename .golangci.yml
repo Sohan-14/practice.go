@@ -1,0 +1,68 @@
+version: 2
+
+run:
+  timeout: 5m
+  go: "1.27.3"
+
+linters:
+  enable:
+    # Default linters
+    - errcheck # Check for unchecked errors
+    - govet # Reports suspicious constructs
+    - ineffassign # Detects unused variable assignments
+    - staticcheck # Comprehensive static analysis (includes gosimple)
+    - unused # Checks for unused code
+
+    # Additional linters for our architecture
+    - depguard # Enforce import boundaries
+    - misspell # Catch typos
+    - revive # Fast, configurable linter
+    - unconvert # Remove unnecessary type conversions
+    - unparam # Reports unused function parameters
+    - bodyclose # Checks HTTP response body is closed
+    - noctx # Finds HTTP requests without context
+    - prealloc # Finds slice declarations that could be preallocated
+
+linters-settings:
+  depguard:
+    rules:
+      # Domain layer: only stdlib allowed
+      domain:
+        files:
+          - "**/domain/**"
+        allow:
+          - $gostd
+        deny:
+          - pkg: "github.com"
+            desc: "domain must not import external packages"
+
+      # Platform layer: cannot import internal (business logic)
+      platform:
+        files:
+          - "**/platform/**"
+        deny:
+          - pkg: "github.com/sohan-14/practice/internal"
+            desc: "platform must not import internal packages"
+
+      # Store layer: can import domain, but not api or app
+      store:
+        files:
+          - "**/store/**"
+        deny:
+          - pkg: "github.com/sohan-14/practice/internal/.*/api"
+            desc: "store must not import api layer"
+
+  revive:
+    rules:
+      - name: exported
+        disabled: true # Don't require comments on every export
+
+issues:
+  # Don't skip warning about excluded issues
+  exclude-use-default: false
+
+  # Maximum issues count per one linter
+  max-issues-per-linter: 50
+
+  # Maximum count of issues with the same text
+  max-same-issues: 10
