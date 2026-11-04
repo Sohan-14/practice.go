@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -33,6 +35,17 @@ const requestIDKey contextKey = "request_id"
 
 var logger *slog.Logger
 
+type validationError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+type errorResponse struct {
+	Error   string            `json:"error"`
+	Message string            `json:"message"`
+	Details []validationError `json:"details,omitempty"`
+}
+
 func main() {
 
 	// Initialize structured JSON logger
@@ -42,6 +55,8 @@ func main() {
 	mux.HandleFunc("GET /{$}", homeHandler)
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /api/hello", helloHandler)
+	mux.HandleFunc("POST /api/users", createUserHandler)
+	mux.HandleFunc("GET /api/search", searchHandler)
 
 	handler := recoverMiddleware(loggingMiddleware(mux))
 
@@ -188,4 +203,145 @@ func newRequestID() (string, error) {
 	}
 
 	return hex.EncodeToString(b), nil
+}
+func createUserHandler(w http.ResponseWriter, r *http.Request) {
+	const maxBodySize = 1 << 20 // 1 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
+	var user struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&user); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Error:   "invalid_json",
+			Message: "Request body contains unknown fields",
+		})
+		return
+	}
+
+	// Collect all validation errors
+	var errors []validationError
+
+	if user.Name == "" {
+		errors = append(errors, validationError{
+			Field:   "name",
+			Message: "Name is required",
+		})
+	} else if len(user.Name) < 2 {
+		errors = append(errors, validationError{
+			Field:   "name",
+			Message: "Name must be at least 2 characters",
+		})
+	}
+
+	if user.Email == "" {
+		errors = append(errors, validationError{
+			Field:   "email",
+			Message: "Email is required",
+		})
+	} else if !isValidEmail(user.Email) {
+		errors = append(errors, validationError{
+			Field:   "email",
+			Message: "Email format is invalid",
+		})
+	}
+
+	// If there are validation errors, return them
+	if len(errors) > 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Error:   "validation_failed",
+			Message: "Request validation failed",
+			Details: errors,
+		})
+		return
+	}
+
+	// Success case
+	log.Printf("created user: %s (%s)", user.Name, user.Email)
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"message": "User created",
+		"name":    user.Name,
+		"email":   user.Email,
+	})
+}
+func isValidEmail(email string) bool {
+	return strings.Contains(email, "@")
+}
+
+func searchHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+
+	// Collect validation errors
+	var errors []validationError
+
+	// Required parameter: q
+	q := query.Get("q")
+	if q == "" {
+		errors = append(errors, validationError{
+			Field:   "q",
+			Message: "Search query is required",
+		})
+	}
+
+	// Optional parameter: page (default 1, must be positive)
+	pageStr := query.Get("page")
+	page := 1
+	if pageStr != "" {
+		p, err := strconv.Atoi(pageStr)
+		if err != nil {
+			errors = append(errors, validationError{
+				Field:   "page",
+				Message: "Page must be a number",
+			})
+		} else if p < 1 {
+			errors = append(errors, validationError{
+				Field:   "page",
+				Message: "Page must be at least 1",
+			})
+		} else {
+			page = p
+		}
+	}
+
+	// Optional parameter: limit (default 10, must be 1-100)
+	limitStr := query.Get("limit")
+	limit := 10
+	if limitStr != "" {
+		l, err := strconv.Atoi(limitStr)
+		if err != nil {
+			errors = append(errors, validationError{
+				Field:   "limit",
+				Message: "Limit must be a number",
+			})
+		} else if l < 1 || l > 100 {
+			errors = append(errors, validationError{
+				Field:   "limit",
+				Message: "Limit must be between 1 and 100",
+			})
+		} else {
+			limit = l
+		}
+	}
+
+	// Return validation errors if any
+	if len(errors) > 0 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Error:   "validation_failed",
+			Message: "Query parameter validation failed",
+			Details: errors,
+		})
+		return
+	}
+
+	// Success: return the parsed parameters
+	writeJSON(w, http.StatusOK, map[string]any{
+		"query": q,
+		"page":  page,
+		"limit": limit,
+	})
 }
